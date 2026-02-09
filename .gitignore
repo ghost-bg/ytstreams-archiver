@@ -32,3 +32,6 @@ google_client_secret.json
 .DS_Store
 .vscode/
 .idea/
+
+# Local AI reference docs
+AI_FEATURES_REFERENCE.md
