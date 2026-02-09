@@ -1,17 +1,12 @@
 # YouTube Stream VOD Archiver (yt-dlp Web UI)
 
-A focused web app for archiving YouTube livestream VODs with `yt-dlp`, while still supporting normal YouTube videos.
+A focused web app for archiving YouTube livestream VODs with `yt-dlp`.
 
 ## Features
-- Archive YouTube livestream VODs and standard videos from a single workflow
-- Fetch formats available for a specific URL
-- Pick an exact `format_id` (or use auto best)
-- Customize the output file name
+- Archive YouTube livestream VODs and standard videos.
 - Download in browser, or upload directly to Google Drive
-- Browse Google Drive folders with nested navigation and select by name
 - Queue multiple archive jobs and process them sequentially
 - Batch queueing from a list of URLs using the same preset
-- See estimated completion time for the active job and queue
 - Optional low-storage mode for browser downloads (auto-cleans temp file after send)
 - Optional local transcription with `faster-whisper` and subtitle-track attachment (MKV output)
 - Optional YouTube live-chat replay extraction and danmaku subtitle-track attachment (MKV output)
