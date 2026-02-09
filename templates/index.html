@@ -1,0 +1,1055 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YouTube Stream VOD Archiver</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="header">
+        <div>
+          <h1>YouTube Stream VOD Archiver</h1>
+          <p>Archive YouTube stream VODs with queueing, format control, and browser or Google Drive delivery.</p>
+        </div>
+        <button id="theme-toggle" type="button" class="theme-toggle">Toggle Theme</button>
+      </header>
+
+      {% if error %}
+      <p class="error">{{ error }}</p>
+      {% endif %}
+      {% if info %}
+      <p class="success">{{ info }}</p>
+      {% endif %}
+      {% if drive_link %}
+      <p><a href="{{ drive_link }}" target="_blank" rel="noopener">Open file in Google Drive</a></p>
+      {% endif %}
+      <details id="execution-log-box" class="settings-panel" {% if execution_log %}open{% endif %}>
+        <summary>Execution Log</summary>
+        <pre id="execution-log-text" class="status">{{ execution_log or "No logs yet." }}</pre>
+      </details>
+
+      <section class="layout">
+        <section class="left-panel">
+          {% if drive_connected %}
+          <p class="status">Google Drive: connected</p>
+          <form action="/google/disconnect" method="post">
+            <button type="submit">Disconnect Google Drive</button>
+          </form>
+          {% elif drive_setup_error %}
+          <p class="status">Google Drive: {{ drive_setup_error }}</p>
+          {% else %}
+          <p class="status">
+            Google Drive: not connected.
+            <a href="/google/connect">Connect now</a>
+          </p>
+          {% endif %}
+
+          <details class="settings-panel">
+            <summary>Google OAuth Settings</summary>
+            <form action="/settings/google" method="post">
+              <p class="status">Current OAuth source: {{ oauth_source }}</p>
+              <p class="status">OAuth redirect URI: <code>{{ oauth_redirect_uri }}</code></p>
+              <label for="google_client_id">Google Client ID</label>
+              <input
+                id="google_client_id"
+                name="google_client_id"
+                type="text"
+                value="{{ oauth_client_id }}"
+                placeholder="Paste your OAuth Client ID"
+              />
+              <label for="google_client_secret">Google Client Secret</label>
+              <input
+                id="google_client_secret"
+                name="google_client_secret"
+                type="password"
+                placeholder="Paste your OAuth Client Secret"
+              />
+              <div class="settings-actions">
+                <button type="submit" name="settings_action" value="save">Save OAuth Settings</button>
+                <button type="submit" name="settings_action" value="clear">Clear Saved Settings</button>
+              </div>
+            </form>
+          </details>
+
+          <form id="formats-form" action="/formats" method="post">
+            <label for="url">YouTube Stream/VOD URL</label>
+            <input
+              id="url"
+              name="url"
+              type="url"
+              placeholder="https://www.youtube.com/watch?v=..."
+              value="{{ url }}"
+              required
+            />
+            <button type="submit">Fetch archive formats</button>
+            <p id="formats-status" class="status"></p>
+          </form>
+
+          <form id="download-form" action="/download" method="post">
+            <input type="hidden" name="url" id="job_url" value="{{ url }}" />
+            <input type="hidden" name="drive_folder_id" id="drive_folder_id" value="{{ selected_drive_folder_id }}" />
+            <input type="hidden" name="format_strategy" id="format_strategy" value="{{ selected_format_strategy or '' }}" />
+            <input type="hidden" name="async_drive" id="async_drive" value="0" />
+
+            <p id="video-title-row" {% if not video_title %}hidden{% endif %}>
+              <strong>Title:</strong> <span id="video-title-text">{{ video_title or "" }}</span>
+            </p>
+
+            <label for="format_id">Format</label>
+            <select id="format_id" name="format_selector">
+              <option value="" data-size-bytes="">Auto best (yt-dlp default)</option>
+              {% for item in formats or [] %}
+              <option value="{{ item.selector }}" data-size-bytes="{{ item.size_bytes or '' }}">{{ item.label }}</option>
+              {% endfor %}
+            </select>
+
+            <label for="preferred_resolution">Preferred max resolution (batch only)</label>
+            <select id="preferred_resolution" name="preferred_resolution">
+              {% for resolution in resolution_options %}
+              <option value="{{ resolution.code }}" {% if preferred_resolution == resolution.code %}selected{% endif %}>
+                {{ resolution.label }}
+              </option>
+              {% endfor %}
+            </select>
+
+            <label for="destination">Destination</label>
+            <select id="destination" name="destination">
+              <option value="browser" {% if selected_destination == "browser" %}selected{% endif %}>
+                Browser download
+              </option>
+              <option value="google_drive" {% if selected_destination == "google_drive" %}selected{% endif %}>
+                Google Drive upload
+              </option>
+            </select>
+
+            <label for="storage_mode">Storage mode</label>
+            <select id="storage_mode" name="storage_mode">
+              <option value="standard">Standard</option>
+              <option value="minimal">Minimize local storage</option>
+            </select>
+
+            <label class="checkbox-row" for="transcribe_subtitles">
+              <input
+                id="transcribe_subtitles"
+                name="transcribe_subtitles"
+                type="checkbox"
+                value="1"
+                {% if transcribe_subtitles == "1" %}checked{% endif %}
+              />
+              Transcribe and attach subtitle track (MKV output)
+            </label>
+
+            <label class="checkbox-row" for="download_chat_danmaku">
+              <input
+                id="download_chat_danmaku"
+                name="download_chat_danmaku"
+                type="checkbox"
+                value="1"
+                {% if download_chat_danmaku == "1" %}checked{% endif %}
+              />
+              Download live chat replay and attach danmaku subtitle track
+            </label>
+
+            <label for="transcription_language">Subtitle language</label>
+            <select id="transcription_language" name="transcription_language">
+              {% for language in transcription_languages %}
+              <option value="{{ language.code }}" {% if transcription_language == language.code %}selected{% endif %}>
+                {{ language.label }}
+              </option>
+              {% endfor %}
+            </select>
+
+            <label for="transcription_model">Whisper model</label>
+            <select id="transcription_model" name="transcription_model">
+              {% for model in transcription_models %}
+              <option value="{{ model.code }}" {% if transcription_model == model.code %}selected{% endif %}>
+                {{ model.label }}
+              </option>
+              {% endfor %}
+            </select>
+
+            <label for="transcription_quality">Transcription quality</label>
+            <select id="transcription_quality" name="transcription_quality">
+              {% for quality in transcription_quality_options %}
+              <option value="{{ quality.code }}" {% if transcription_quality == quality.code %}selected{% endif %}>
+                {{ quality.label }}
+              </option>
+              {% endfor %}
+            </select>
+
+            <label for="custom_filename">Custom file name (optional)</label>
+            <input
+              id="custom_filename"
+              name="custom_filename"
+              type="text"
+              value="{{ custom_filename }}"
+              placeholder="Example: my-video"
+            />
+
+            <div class="quick-actions">
+              <button type="submit">Archive Now</button>
+              <button id="add-to-queue" type="button">Queue Archive Job</button>
+            </div>
+
+            <label for="batch_urls">Batch archive URLs (one per line)</label>
+            <textarea
+              id="batch_urls"
+              name="batch_urls"
+              rows="6"
+              placeholder="https://www.youtube.com/watch?v=...\nhttps://www.youtube.com/watch?v=..."
+            ></textarea>
+            <label class="checkbox-row" for="batch_auto_title">
+              <input id="batch_auto_title" name="batch_auto_title" type="checkbox" value="1" checked />
+              Batch: use stream/video titles for file names
+            </label>
+            <label for="batch_max_filesize_mb">Batch: max file size per archive (MB, optional)</label>
+            <input
+              id="batch_max_filesize_mb"
+              name="batch_max_filesize_mb"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Example: 1500"
+            />
+            <button id="add-batch-to-queue" type="button">Queue Batch Archive Jobs</button>
+          </form>
+        </section>
+
+        <section class="right-panel">
+          <h2>Google Drive Folder Browser</h2>
+          <div id="folder-browser" class="folder-browser">
+            <div id="folder-breadcrumbs" class="folder-breadcrumbs"></div>
+            <div class="folder-browser-actions">
+              <button id="folder-select-current" type="button">Select Current Folder</button>
+              <button id="folder-reset-root" type="button">Use My Drive Root</button>
+            </div>
+            <p id="folder-selected" class="status">Selected: My Drive root</p>
+            <div id="folder-list" class="folder-list"></div>
+            <p id="folder-browser-status" class="status"></p>
+          </div>
+
+          <h2>Queue</h2>
+          <div class="queue-meta">
+            <p id="queue-summary" class="status">Archive queue is empty.</p>
+            <button id="clear-completed" type="button">Clear Completed</button>
+          </div>
+          <div id="queue-list" class="queue-list"></div>
+
+          <h2>Progress</h2>
+          <div id="drive-progress-wrap" class="progress-wrap" hidden>
+            <label for="drive-progress">Current job progress</label>
+            <progress id="drive-progress" max="100" value="0"></progress>
+            <p id="drive-progress-text" class="status">Idle.</p>
+            <p id="drive-upload-result" class="status"></p>
+            <button id="cancel-current-download" type="button" class="secondary" disabled>Cancel Current Download</button>
+          </div>
+
+          <h2>Storage</h2>
+          <div class="storage-wrap">
+            <p id="storage-download" class="status">Downloads free: checking...</p>
+            <p id="storage-transcribe" class="status">Transcription temp free: checking...</p>
+            <p id="storage-warning" class="error" hidden></p>
+            <button id="storage-refresh" type="button" class="secondary">Refresh Storage</button>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script>
+      const THEME_STORAGE_KEY = "ytdlp_webui_theme";
+      const themeToggleButton = document.getElementById("theme-toggle");
+
+      function detectSystemTheme() {
+        return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+
+      function applyTheme(theme) {
+        const resolved = theme === "dark" ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", resolved);
+        if (themeToggleButton) {
+          themeToggleButton.textContent = resolved === "dark" ? "Switch To Light" : "Switch To Dark";
+        }
+      }
+
+      try {
+        const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+        applyTheme(savedTheme || detectSystemTheme());
+      } catch (_) {
+        applyTheme(detectSystemTheme());
+      }
+
+      themeToggleButton?.addEventListener("click", () => {
+        const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+        const next = current === "dark" ? "light" : "dark";
+        applyTheme(next);
+        try {
+          localStorage.setItem(THEME_STORAGE_KEY, next);
+        } catch (_) {}
+      });
+
+      const form = document.getElementById("download-form");
+      if (form) {
+        const formatsForm = document.getElementById("formats-form");
+        const formatsStatus = document.getElementById("formats-status");
+        const formatSelect = document.getElementById("format_id");
+        const formatStrategyInput = document.getElementById("format_strategy");
+        const jobUrlInput = document.getElementById("job_url");
+        const customFilenameInput = document.getElementById("custom_filename");
+        const videoTitleRow = document.getElementById("video-title-row");
+        const videoTitleText = document.getElementById("video-title-text");
+        const destination = document.getElementById("destination");
+        const asyncDrive = document.getElementById("async_drive");
+        const folderIdInput = document.getElementById("drive_folder_id");
+        const folderList = document.getElementById("folder-list");
+        const folderStatus = document.getElementById("folder-browser-status");
+        const folderSelected = document.getElementById("folder-selected");
+        const folderBreadcrumbs = document.getElementById("folder-breadcrumbs");
+        const folderSelectCurrent = document.getElementById("folder-select-current");
+        const folderResetRoot = document.getElementById("folder-reset-root");
+        const addToQueue = document.getElementById("add-to-queue");
+        const transcribeCheckbox = document.getElementById("transcribe_subtitles");
+        const chatDanmakuCheckbox = document.getElementById("download_chat_danmaku");
+        const transcriptionLanguage = document.getElementById("transcription_language");
+        const transcriptionModel = document.getElementById("transcription_model");
+        const transcriptionQuality = document.getElementById("transcription_quality");
+        const preferredResolution = document.getElementById("preferred_resolution");
+        const batchUrlsInput = document.getElementById("batch_urls");
+        const batchAutoTitleInput = document.getElementById("batch_auto_title");
+        const batchMaxFilesizeMbInput = document.getElementById("batch_max_filesize_mb");
+        const addBatchToQueueButton = document.getElementById("add-batch-to-queue");
+        const queueList = document.getElementById("queue-list");
+        const queueSummary = document.getElementById("queue-summary");
+        const clearCompleted = document.getElementById("clear-completed");
+        const progressWrap = document.getElementById("drive-progress-wrap");
+        const progressBar = document.getElementById("drive-progress");
+        const progressText = document.getElementById("drive-progress-text");
+        const resultText = document.getElementById("drive-upload-result");
+        const storageDownload = document.getElementById("storage-download");
+        const storageTranscribe = document.getElementById("storage-transcribe");
+        const storageWarning = document.getElementById("storage-warning");
+        const storageRefresh = document.getElementById("storage-refresh");
+        const cancelCurrentDownloadButton = document.getElementById("cancel-current-download");
+        const executionLogBox = document.getElementById("execution-log-box");
+        const executionLogText = document.getElementById("execution-log-text");
+        const driveConnected = {{ "true" if drive_connected else "false" }};
+        const initialSelectedFolderId = {{ selected_drive_folder_id|tojson }};
+        const pathStack = [{ id: "", name: "My Drive" }];
+        let selectedFolder = { id: initialSelectedFolderId, name: initialSelectedFolderId ? "Custom folder" : "My Drive root" };
+        const QUEUE_STORAGE_KEY = "ytdlp_webui_queue_v1";
+        const QUEUE_META_STORAGE_KEY = "ytdlp_webui_queue_meta_v1";
+
+        const queue = [];
+        let queueRunning = false;
+        let movingAvgSeconds = 120;
+        let throughputBytesPerSecond = 2_000_000;
+        let activeProgressTimer = null;
+        let activeAbortController = null;
+        let activeJobId = "";
+        let lastFetchedContextKey = "";
+        let latestStorage = null;
+
+        function saveQueueState() {
+          try {
+            localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
+            localStorage.setItem(QUEUE_META_STORAGE_KEY, JSON.stringify({ movingAvgSeconds, throughputBytesPerSecond }));
+          } catch (_) {}
+        }
+
+        function loadQueueState() {
+          try {
+            const rawQueue = localStorage.getItem(QUEUE_STORAGE_KEY);
+            if (rawQueue) {
+              const parsed = JSON.parse(rawQueue);
+              if (Array.isArray(parsed)) {
+                parsed.forEach((item) => {
+                  if (!item || typeof item !== "object") return;
+                  queue.push({
+                    id: item.id || crypto.randomUUID(),
+                    url: item.url || "",
+                    formatSelector: item.formatSelector || "",
+                    formatStrategy: item.formatStrategy || "",
+                    useResolutionPreset: (item.useResolutionPreset === "1" || item.useResolutionPreset === true) ? "1" : "0",
+                    allowFallback: (item.allowFallback === "1" || item.allowFallback === true) ? "1" : "0",
+                    preferNonHlsAuto: (item.preferNonHlsAuto === "1" || item.preferNonHlsAuto === true) ? "1" : "0",
+                    batchAutoTitle: (item.batchAutoTitle === "1" || item.batchAutoTitle === true) ? "1" : "0",
+                    batchMaxFilesizeMb: item.batchMaxFilesizeMb || "",
+                    preferredResolution: item.preferredResolution || "auto",
+                    destination: item.destination || "browser",
+                    storageMode: item.storageMode || "standard",
+                    transcribeSubtitles: (item.transcribeSubtitles === "1" || item.transcribeSubtitles === true) ? "1" : "0",
+                    downloadChatDanmaku: (item.downloadChatDanmaku === "1" || item.downloadChatDanmaku === true) ? "1" : "0",
+                    transcriptionLanguage: item.transcriptionLanguage || "auto",
+                    transcriptionModel: item.transcriptionModel || {{ transcription_model|tojson }},
+                    transcriptionQuality: item.transcriptionQuality || "balanced",
+                    customFilename: item.customFilename || "",
+                    driveFolderId: item.driveFolderId || "",
+                    label: item.label || "Queued archive job",
+                    status: item.status === "running" ? "queued" : (item.status || "queued"),
+                  });
+                });
+              }
+            }
+
+            const rawMeta = localStorage.getItem(QUEUE_META_STORAGE_KEY);
+            if (rawMeta) {
+              const meta = JSON.parse(rawMeta);
+              if (meta && Number.isFinite(meta.movingAvgSeconds)) {
+                movingAvgSeconds = Math.max(20, Number(meta.movingAvgSeconds));
+              }
+              if (meta && Number.isFinite(meta.throughputBytesPerSecond)) {
+                throughputBytesPerSecond = Math.max(200_000, Number(meta.throughputBytesPerSecond));
+              }
+            }
+          } catch (_) {}
+        }
+
+        function updateTranscriptionControls() {
+          const enabled = transcribeCheckbox?.checked;
+          if (transcriptionLanguage) transcriptionLanguage.disabled = !enabled;
+          if (transcriptionModel) transcriptionModel.disabled = !enabled;
+          if (transcriptionQuality) transcriptionQuality.disabled = !enabled;
+        }
+
+        function formatSeconds(value) {
+          const total = Math.max(0, Math.round(value));
+          const minutes = Math.floor(total / 60);
+          const seconds = total % 60;
+          return `${minutes}:${String(seconds).padStart(2, "0")}`;
+        }
+
+        function formatBytes(value) {
+          if (!Number.isFinite(value) || value <= 0) return "0 B";
+          const units = ["B", "KB", "MB", "GB", "TB"];
+          let size = value;
+          let idx = 0;
+          while (size >= 1024 && idx < units.length - 1) {
+            size /= 1024;
+            idx += 1;
+          }
+          return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[idx]}`;
+        }
+
+        function estimateLocalPeakBytes(job) {
+          if (!Number.isFinite(job.expectedBytes) || job.expectedBytes <= 0) return null;
+          const source = Number(job.expectedBytes);
+          if (job.transcribeSubtitles === "1" || job.downloadChatDanmaku === "1") {
+            // Peak during mux: source + muxed output + overhead.
+            const factor = (job.transcribeSubtitles === "1" && job.downloadChatDanmaku === "1") ? 2.45 : 2.25;
+            return Math.round((source * factor) + (300 * 1024 * 1024));
+          }
+          return Math.round((source * 1.2) + (100 * 1024 * 1024));
+        }
+
+        function freeBytesForJob(job) {
+          if (!latestStorage) return null;
+          if (job.transcribeSubtitles === "1") {
+            return latestStorage.transcribe_tmp_dir?.free_bytes ?? null;
+          }
+          return latestStorage.download_dir?.free_bytes ?? null;
+        }
+
+        function updateStorageRiskWarning() {
+          if (!storageWarning) return;
+          const candidates = queue.filter((item) => item.status === "queued" || item.status === "running");
+          const risky = candidates.find((job) => {
+            const need = estimateLocalPeakBytes(job);
+            const free = freeBytesForJob(job);
+            if (!Number.isFinite(need) || !Number.isFinite(free)) return false;
+            return need >= (free * 0.92);
+          });
+          if (!risky) {
+            storageWarning.hidden = true;
+            storageWarning.textContent = "";
+            return;
+          }
+          const needed = estimateLocalPeakBytes(risky);
+          const free = freeBytesForJob(risky);
+          storageWarning.hidden = false;
+          storageWarning.textContent = `Warning: "${risky.label}" may exceed local disk space. Estimated peak ${formatBytes(needed)} vs free ${formatBytes(free)}.`;
+        }
+
+        async function refreshStorageIndicator() {
+          try {
+            const response = await fetch("/system/storage");
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.error || "Storage check failed.");
+            }
+            latestStorage = payload;
+            storageDownload.textContent = `Downloads free: ${formatBytes(payload.download_dir?.free_bytes)} (${payload.download_dir?.path || "-"})`;
+            storageTranscribe.textContent = `Transcription temp free: ${formatBytes(payload.transcribe_tmp_dir?.free_bytes)} (${payload.transcribe_tmp_dir?.path || "-"})`;
+            updateStorageRiskWarning();
+          } catch (err) {
+            storageDownload.textContent = "Downloads free: unavailable";
+            storageTranscribe.textContent = "Transcription temp free: unavailable";
+            storageWarning.hidden = false;
+            storageWarning.textContent = err?.message || "Storage check failed.";
+          }
+        }
+
+        function parseFilenameFromDisposition(headerValue) {
+          if (!headerValue) return null;
+          const match = headerValue.match(/filename\*?=(?:UTF-8''|")?([^\";]+)/i);
+          return match ? decodeURIComponent(match[1]).replace(/\"/g, "") : null;
+        }
+
+        function triggerBrowserDownload(blob, fileName) {
+          const objectUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = objectUrl;
+          link.download = fileName || "download.bin";
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.style.display = "none";
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(() => {
+            URL.revokeObjectURL(objectUrl);
+            link.remove();
+          }, 60000);
+        }
+
+        function setExecutionLog(text, open = false) {
+          if (!executionLogText) return;
+          executionLogText.textContent = (text || "").trim() || "No logs yet.";
+          if (open && executionLogBox) {
+            executionLogBox.open = true;
+          }
+        }
+
+        function estimateJobSeconds(job) {
+          if (Number.isFinite(job.expectedBytes) && job.expectedBytes > 0) {
+            const speed = Math.max(200_000, throughputBytesPerSecond);
+            const transferSeconds = job.expectedBytes / speed;
+            const overhead = job.destination === "google_drive" ? 35 : 20;
+            return Math.max(30, transferSeconds + overhead);
+          }
+          return Math.max(45, movingAvgSeconds);
+        }
+
+        function queueCounts() {
+          const pending = queue.filter((item) => item.status === "queued").length;
+          const running = queue.filter((item) => item.status === "running").length;
+          const done = queue.filter((item) => item.status === "done").length;
+          const failed = queue.filter((item) => item.status === "failed").length;
+          return { pending, running, done, failed };
+        }
+
+        function updateQueueSummary() {
+          const { pending, running, done, failed } = queueCounts();
+          const queuedEta = queue
+            .filter((item) => item.status === "queued" || item.status === "running")
+            .reduce((acc, item) => acc + estimateJobSeconds(item), 0);
+          queueSummary.textContent = `Pending: ${pending} | Running: ${running} | Done: ${done} | Failed: ${failed} | ETA: ${formatSeconds(queuedEta)}`;
+        }
+
+        function renderQueue() {
+          queueList.innerHTML = "";
+          if (!queue.length) {
+            const empty = document.createElement("p");
+            empty.className = "status";
+            empty.textContent = "No archive jobs queued.";
+            queueList.appendChild(empty);
+            updateQueueSummary();
+            saveQueueState();
+            return;
+          }
+          queue.forEach((item) => {
+            const row = document.createElement("div");
+            row.className = `queue-item ${item.status}`;
+
+            const title = document.createElement("strong");
+            title.textContent = item.label;
+
+            const meta = document.createElement("p");
+            meta.className = "status";
+            const subtitleMeta = [
+              item.transcribeSubtitles === "1"
+                ? `transcript:${item.transcriptionLanguage || "auto"}, ${item.transcriptionModel || "base"}, ${item.transcriptionQuality || "balanced"}`
+                : "",
+              item.downloadChatDanmaku === "1" ? "chat:danmaku" : "",
+            ].filter(Boolean).join(" + ");
+            meta.textContent = `${item.destination === "google_drive" ? "Drive" : "Browser"} | ${item.storageMode === "minimal" ? "low-storage" : "standard"} | ${item.useResolutionPreset === "1" ? `res<=${item.preferredResolution || "auto"}${item.batchMaxFilesizeMb ? `, <=${item.batchMaxFilesizeMb}MB` : ""}` : "manual/auto"} | ${subtitleMeta || "no-subs"} | ${item.status}`;
+
+            const actions = document.createElement("div");
+            actions.className = "queue-actions";
+            const index = queue.indexOf(item);
+
+            const upBtn = document.createElement("button");
+            upBtn.type = "button";
+            upBtn.className = "secondary";
+            upBtn.textContent = "Up";
+            upBtn.disabled = index === 0 || item.status !== "queued";
+            upBtn.addEventListener("click", () => {
+              if (index <= 0) return;
+              const prev = queue[index - 1];
+              if (prev.status !== "queued") return;
+              queue[index - 1] = item;
+              queue[index] = prev;
+              renderQueue();
+            });
+
+            const downBtn = document.createElement("button");
+            downBtn.type = "button";
+            downBtn.className = "secondary";
+            downBtn.textContent = "Down";
+            downBtn.disabled = index === queue.length - 1 || item.status !== "queued";
+            downBtn.addEventListener("click", () => {
+              if (index >= queue.length - 1) return;
+              const next = queue[index + 1];
+              if (next.status !== "queued") return;
+              queue[index + 1] = item;
+              queue[index] = next;
+              renderQueue();
+            });
+
+            const removeBtn = document.createElement("button");
+            removeBtn.type = "button";
+            removeBtn.className = "secondary";
+            removeBtn.textContent = "Remove";
+            removeBtn.disabled = item.status === "running";
+            removeBtn.addEventListener("click", () => {
+              const removeIndex = queue.findIndex((entry) => entry.id === item.id);
+              if (removeIndex >= 0) {
+                queue.splice(removeIndex, 1);
+                renderQueue();
+              }
+            });
+
+            actions.appendChild(upBtn);
+            actions.appendChild(downBtn);
+            actions.appendChild(removeBtn);
+
+            row.appendChild(title);
+            row.appendChild(meta);
+            row.appendChild(actions);
+            queueList.appendChild(row);
+          });
+          updateQueueSummary();
+          updateStorageRiskWarning();
+          saveQueueState();
+        }
+
+        function captureJobFromForm() {
+          const currentUrl = document.getElementById("job_url").value;
+          const job = {
+            id: crypto.randomUUID(),
+            url: currentUrl,
+            formatSelector: document.getElementById("format_id").value,
+            formatStrategy: document.getElementById("format_strategy").value,
+            useResolutionPreset: "0",
+            allowFallback: "0",
+            preferNonHlsAuto: "0",
+            batchAutoTitle: "0",
+            batchMaxFilesizeMb: "",
+            preferredResolution: preferredResolution?.value || "auto",
+            destination: document.getElementById("destination").value,
+            storageMode: document.getElementById("storage_mode").value,
+            transcribeSubtitles: transcribeCheckbox?.checked ? "1" : "0",
+            downloadChatDanmaku: chatDanmakuCheckbox?.checked ? "1" : "0",
+            transcriptionLanguage: transcriptionLanguage?.value || "auto",
+            transcriptionModel: transcriptionModel?.value || {{ transcription_model|tojson }},
+            transcriptionQuality: transcriptionQuality?.value || "balanced",
+            customFilename: document.getElementById("custom_filename").value,
+            driveFolderId: folderIdInput.value,
+            expectedBytes: Number((document.getElementById("format_id").selectedOptions?.[0]?.dataset?.sizeBytes || "").trim()) || null,
+            label: document.getElementById("custom_filename").value || {{ (video_title or "Archive job")|tojson }},
+            fetchedContextKey: currentUrl,
+            status: "queued",
+          };
+          return job;
+        }
+
+        function parseBatchUrls(rawText) {
+          const text = (rawText || "").trim();
+          if (!text) return [];
+          const tokens = text.split(/\s+/).map((value) => value.trim()).filter(Boolean);
+          const valid = [];
+          tokens.forEach((token) => {
+            if (/^https?:\/\//i.test(token)) valid.push(token);
+          });
+          return Array.from(new Set(valid));
+        }
+
+        function buildBatchJobs(urls) {
+          const base = captureJobFromForm();
+          return urls.map((url) => {
+            let host = "batch";
+            try {
+              host = new URL(url).hostname;
+            } catch (_) {}
+            return {
+              ...base,
+              id: crypto.randomUUID(),
+              url,
+              // Format IDs are per-video and do not generalize across batch URLs.
+              formatSelector: "",
+              formatStrategy: "",
+              useResolutionPreset: "1",
+              allowFallback: "1",
+              preferNonHlsAuto: "1",
+              batchAutoTitle: batchAutoTitleInput?.checked ? "1" : "0",
+              batchMaxFilesizeMb: (batchMaxFilesizeMbInput?.value || "").trim(),
+              fetchedContextKey: "",
+              customFilename: "",
+              label: url,
+              status: "queued",
+            };
+          });
+        }
+
+        function validateFormatContext(job) {
+          if (!job.formatSelector) return true;
+          const effectiveKey = job.fetchedContextKey || `${job.url || ""}`;
+          if (effectiveKey === lastFetchedContextKey) return true;
+          finishProgress(false, "Selected format may be stale for current cookies/context. Fetch formats again, then retry.");
+          return false;
+        }
+
+        function startProgress(job) {
+          progressWrap.hidden = false;
+          progressBar.value = 0;
+          resultText.className = "status";
+          resultText.textContent = "";
+          const startedAt = Date.now();
+          progressText.textContent = `Starting: ${job.label}`;
+          if (cancelCurrentDownloadButton) {
+            cancelCurrentDownloadButton.disabled = false;
+          }
+          if (activeProgressTimer) clearInterval(activeProgressTimer);
+          activeProgressTimer = setInterval(() => {
+            const elapsed = (Date.now() - startedAt) / 1000;
+            const baseEstimate = estimateJobSeconds(job);
+            const adaptiveEstimate = elapsed > baseEstimate ? Math.max(baseEstimate * 1.25, elapsed * 1.35) : baseEstimate;
+            const remaining = adaptiveEstimate - elapsed;
+
+            if (remaining <= 0) {
+              // Keep visible activity when the estimate has been exceeded.
+              progressBar.removeAttribute("value");
+              progressText.textContent = `Processing ${job.label} | Elapsed ${formatSeconds(elapsed)} | Taking longer than estimate`;
+            } else {
+              const pct = Math.min(97, (elapsed / adaptiveEstimate) * 100);
+              progressBar.value = pct;
+              progressText.textContent = `Processing ${job.label} | ETA ~ ${formatSeconds(remaining)} | Elapsed ${formatSeconds(elapsed)}`;
+            }
+          }, 500);
+          return startedAt;
+        }
+
+        function finishProgress(ok, message) {
+          if (activeProgressTimer) clearInterval(activeProgressTimer);
+          activeProgressTimer = null;
+          progressBar.value = ok ? 100 : progressBar.value;
+          progressText.textContent = ok ? "Completed." : "Failed.";
+          resultText.className = ok ? "status" : "error";
+          resultText.textContent = message;
+          if (cancelCurrentDownloadButton) {
+            cancelCurrentDownloadButton.disabled = true;
+          }
+        }
+
+        async function runJob(job) {
+          job.status = "running";
+          renderQueue();
+          const startedAt = startProgress(job);
+          if (!validateFormatContext(job)) {
+            job.status = "failed";
+            renderQueue();
+            return;
+          }
+
+          const body = new FormData();
+          body.set("job_id", job.id);
+          body.set("url", job.url);
+          body.set("format_selector", job.formatSelector);
+          body.set("format_strategy", job.formatStrategy || "");
+          body.set("use_resolution_preset", job.useResolutionPreset || "0");
+          body.set("allow_fallback", job.allowFallback || "0");
+          body.set("prefer_non_hls_auto", job.preferNonHlsAuto || "0");
+          body.set("batch_auto_title", job.batchAutoTitle || "0");
+          body.set("batch_max_filesize_mb", job.batchMaxFilesizeMb || "");
+          body.set("preferred_resolution", job.preferredResolution || "auto");
+          body.set("destination", job.destination);
+          body.set("storage_mode", job.storageMode || "standard");
+          body.set("transcribe_subtitles", job.transcribeSubtitles || "0");
+          body.set("download_chat_danmaku", job.downloadChatDanmaku || "0");
+          body.set("transcription_language", job.transcriptionLanguage || "auto");
+          body.set("transcription_model", job.transcriptionModel || {{ transcription_model|tojson }});
+          body.set("transcription_quality", job.transcriptionQuality || "balanced");
+          body.set("drive_folder_id", job.driveFolderId);
+          body.set("custom_filename", job.customFilename);
+          body.set("async_drive", job.destination === "google_drive" ? "1" : "0");
+
+          try {
+            activeAbortController = new AbortController();
+            activeJobId = job.id;
+            const response = await fetch(form.action, { method: "POST", body, signal: activeAbortController.signal });
+            if (job.destination === "google_drive") {
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                setExecutionLog(payload.execution_log || payload.error || "Drive upload failed.", true);
+                throw new Error(payload.error || "Drive upload failed.");
+              }
+              setExecutionLog(payload.execution_log || "", false);
+              job.status = "done";
+              const elapsed = (Date.now() - startedAt) / 1000;
+              movingAvgSeconds = (movingAvgSeconds * 0.7) + (elapsed * 0.3);
+              if (Number.isFinite(job.expectedBytes) && job.expectedBytes > 0 && elapsed > 0) {
+                const measured = job.expectedBytes / elapsed;
+                throughputBytesPerSecond = (throughputBytesPerSecond * 0.75) + (measured * 0.25);
+              }
+              finishProgress(true, payload.info || "Uploaded to Google Drive.");
+              if (payload.drive_link) {
+                resultText.innerHTML = `<a href="${payload.drive_link}" target="_blank" rel="noopener">Open file in Google Drive</a>`;
+              }
+            } else {
+              if (!response.ok) {
+                const errorText = await response.text();
+                setExecutionLog(errorText, true);
+                throw new Error(errorText);
+              }
+              const blob = await response.blob();
+              const fileName = parseFilenameFromDisposition(response.headers.get("Content-Disposition")) || "download.bin";
+              triggerBrowserDownload(blob, fileName);
+              job.status = "done";
+              const elapsed = (Date.now() - startedAt) / 1000;
+              movingAvgSeconds = (movingAvgSeconds * 0.7) + (elapsed * 0.3);
+              if (blob.size > 0 && elapsed > 0) {
+                const measured = blob.size / elapsed;
+                throughputBytesPerSecond = (throughputBytesPerSecond * 0.75) + (measured * 0.25);
+              }
+              finishProgress(true, `Downloaded ${fileName}`);
+            }
+          } catch (err) {
+            job.status = "failed";
+            const isAbort = err?.name === "AbortError";
+            const message = isAbort ? "Download cancelled." : (err?.message || "Job failed.");
+            setExecutionLog(message, true);
+            finishProgress(false, message);
+          } finally {
+            activeAbortController = null;
+            activeJobId = "";
+          }
+          renderQueue();
+        }
+
+        async function runQueue() {
+          if (queueRunning) return;
+          queueRunning = true;
+          while (true) {
+            const next = queue.find((item) => item.status === "queued");
+            if (!next) break;
+            await runJob(next);
+          }
+          queueRunning = false;
+        }
+
+        formatsForm?.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const body = new FormData(formatsForm);
+          formatsStatus.textContent = "Fetching formats...";
+          try {
+            const response = await fetch("/formats/json", {
+              method: "POST",
+              body,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              formatsStatus.textContent = payload.error || "Failed to fetch formats.";
+              setExecutionLog(payload.execution_log || payload.error || "Failed to fetch formats.", true);
+              return;
+            }
+
+            formatSelect.innerHTML = "";
+            const autoOption = document.createElement("option");
+            autoOption.value = "";
+            autoOption.dataset.sizeBytes = "";
+            autoOption.textContent = "Auto best (yt-dlp default)";
+            formatSelect.appendChild(autoOption);
+            payload.formats.forEach((item) => {
+              const option = document.createElement("option");
+              option.value = item.selector;
+              option.dataset.sizeBytes = item.size_bytes ? String(item.size_bytes) : "";
+              option.textContent = item.label;
+              formatSelect.appendChild(option);
+            });
+            formatStrategyInput.value = payload.format_strategy || "";
+
+            jobUrlInput.value = payload.url;
+            if (payload.video_title) {
+              videoTitleRow.hidden = false;
+              videoTitleText.textContent = payload.video_title;
+              customFilenameInput.value = payload.video_title;
+            } else {
+              videoTitleRow.hidden = true;
+              videoTitleText.textContent = "";
+            }
+
+            formatsStatus.textContent = `Loaded ${payload.formats.length} formats.`;
+            lastFetchedContextKey = payload.url || "";
+            setExecutionLog(payload.execution_log || "", false);
+          } catch (err) {
+            formatsStatus.textContent = "Network error while fetching formats.";
+            setExecutionLog(err?.message || "Network error while fetching formats.", true);
+          }
+        });
+
+        function renderBreadcrumbs() {
+          folderBreadcrumbs.innerHTML = "";
+          pathStack.forEach((node, index) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "crumb";
+            btn.textContent = node.name;
+            btn.disabled = index === pathStack.length - 1;
+            btn.addEventListener("click", async () => {
+              pathStack.splice(index + 1);
+              await loadFolders(node.id);
+            });
+            folderBreadcrumbs.appendChild(btn);
+          });
+        }
+
+        function renderSelected() {
+          folderSelected.textContent = `Selected: ${selectedFolder.name}`;
+          folderIdInput.value = selectedFolder.id;
+        }
+
+        async function loadFolders(parentId) {
+          folderStatus.textContent = "Loading folders...";
+          folderList.innerHTML = "";
+          try {
+            const url = parentId ? `/google/folders?parent_id=${encodeURIComponent(parentId)}` : "/google/folders";
+            const response = await fetch(url);
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              folderStatus.textContent = payload.error || "Failed to load folders.";
+              return;
+            }
+            if (!payload.folders.length) {
+              folderStatus.textContent = "No subfolders here.";
+              return;
+            }
+            folderStatus.textContent = "";
+            payload.folders.forEach((folder) => {
+              const row = document.createElement("div");
+              row.className = "folder-row";
+
+              const openButton = document.createElement("button");
+              openButton.type = "button";
+              openButton.textContent = folder.name;
+              openButton.addEventListener("click", async () => {
+                pathStack.push({ id: folder.id, name: folder.name });
+                await loadFolders(folder.id);
+              });
+
+              const chooseButton = document.createElement("button");
+              chooseButton.type = "button";
+              chooseButton.className = "secondary";
+              chooseButton.textContent = "Select";
+              chooseButton.addEventListener("click", () => {
+                selectedFolder = { id: folder.id, name: folder.name };
+                renderSelected();
+              });
+
+              row.appendChild(openButton);
+              row.appendChild(chooseButton);
+              folderList.appendChild(row);
+            });
+          } catch (err) {
+            folderStatus.textContent = "Could not reach folder API.";
+          }
+        }
+
+        if (driveConnected) {
+          renderBreadcrumbs();
+          renderSelected();
+          loadFolders("");
+        } else {
+          folderStatus.textContent = "Connect Google Drive to browse folders.";
+        }
+
+        loadQueueState();
+        updateTranscriptionControls();
+        renderQueue();
+        refreshStorageIndicator();
+        setInterval(refreshStorageIndicator, 30000);
+        lastFetchedContextKey = jobUrlInput?.value || "";
+        runQueue();
+
+        transcribeCheckbox?.addEventListener("change", updateTranscriptionControls);
+        storageRefresh?.addEventListener("click", refreshStorageIndicator);
+
+        folderSelectCurrent?.addEventListener("click", () => {
+          const current = pathStack[pathStack.length - 1];
+          selectedFolder = {
+            id: current.id || "",
+            name: current.id ? current.name : "My Drive root",
+          };
+          renderSelected();
+        });
+
+        folderResetRoot?.addEventListener("click", async () => {
+          selectedFolder = { id: "", name: "My Drive root" };
+          pathStack.splice(1);
+          renderBreadcrumbs();
+          renderSelected();
+          await loadFolders("");
+        });
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const job = captureJobFromForm();
+          queue.unshift(job);
+          renderQueue();
+          await runQueue();
+        });
+
+        addToQueue?.addEventListener("click", () => {
+          const job = captureJobFromForm();
+          queue.push(job);
+          renderQueue();
+          runQueue();
+        });
+
+        addBatchToQueueButton?.addEventListener("click", () => {
+          const urls = parseBatchUrls(batchUrlsInput?.value || "");
+          if (!urls.length) {
+            setExecutionLog("No valid URLs found in batch input.", true);
+            return;
+          }
+          const jobs = buildBatchJobs(urls);
+          jobs.forEach((job) => queue.push(job));
+          renderQueue();
+          runQueue();
+          if (batchUrlsInput) batchUrlsInput.value = "";
+        });
+
+        cancelCurrentDownloadButton?.addEventListener("click", async () => {
+          if (!activeJobId) return;
+          const jobId = activeJobId;
+          try {
+            if (activeAbortController) {
+              activeAbortController.abort();
+            }
+            const body = new FormData();
+            body.set("job_id", jobId);
+            await fetch("/download/cancel", { method: "POST", body });
+          } catch (_) {
+            // UI already aborted local request; backend cancel best-effort.
+          }
+        });
+
+        clearCompleted?.addEventListener("click", () => {
+          for (let i = queue.length - 1; i >= 0; i -= 1) {
+            if (queue[i].status === "done" || queue[i].status === "failed") {
+              queue.splice(i, 1);
+            }
+          }
+          renderQueue();
+        });
+      }
+    </script>
+  </body>
+</html>
