@@ -3,11 +3,9 @@
 A focused web app for archiving YouTube livestream VODs with `yt-dlp`.
 
 ## Features
-- Archive YouTube livestream VODs and standard videos.
-- Download in browser, or upload directly to Google Drive
-- Queue multiple archive jobs and process them sequentially
+- Upload directly to Google Drive
+- Queue multiple jobs
 - Batch queueing from a list of URLs using the same preset
-- Optional low-storage mode for browser downloads (auto-cleans temp file after send)
 - Optional local transcription with `faster-whisper` and subtitle-track attachment (MKV output)
 - Optional YouTube live-chat replay extraction and danmaku subtitle-track attachment (MKV output)
 
